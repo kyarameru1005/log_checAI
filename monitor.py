@@ -14,6 +14,14 @@ LOG_FORMAT = "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""
 parser = apache_log_parser.make_parser(LOG_FORMAT)
 ANALYSIS_FILE = "analysis_results.jsonl"
 
+# --- ★★★★★ 日付データを自動で文字列に変換する特別クラス ★★★★★ ---
+class DateTimeEncoder(json.JSONEncoder):
+    """ datetimeオブジェクトをJSONが扱える文字列に変換する """
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
+
 # --- 1. ルールベースのブラックリスト ---
 BLACKLISTED_PATTERNS = [
     "/.env", "/.git", "/wp-config.php", "etc/passwd",
@@ -42,7 +50,7 @@ def predict_log_anomaly(log_text):
     prediction = model.predict(vectorized_text)[0]
     return bool(prediction)
 
-# --- ★★★ 分析シーケンス（サンドボックス起動〜記録）★★★ ---
+# --- 分析シーケンス（サンドボックス起動〜記録）---
 def trigger_analysis_sequence(log_data, detection_method):
     print(f"--- 🚀 分析シーケンス開始 (検知方法: {detection_method}) ---")
     
@@ -78,7 +86,8 @@ def trigger_analysis_sequence(log_data, detection_method):
             "reproduction_result": reproduce_output.strip()
         }
         with open(ANALYSIS_FILE, "a") as f:
-            f.write(json.dumps(analysis_record, cls=json.JSONEncoder) + "\n")
+            # ↓↓↓ ここをDateTimeEncoderクラスを使うように修正しました！ ↓↓↓
+            f.write(json.dumps(analysis_record, cls=DateTimeEncoder) + "\n")
         print("   ✅ 記録完了。")
     except Exception as e:
         print(f"[エラー] 結果の記録に失敗: {e}")
@@ -112,7 +121,9 @@ class ChangeHandler(FileSystemEventHandler):
                         pprint(log_data)
                         trigger_analysis_sequence(log_data, "AI-based")
                     else:
-                        print(f"✅ [正常] {request_line}")
+                        # 正常なログは大量に出力されるため、簡潔に表示
+                        # print(f"✅ [正常] {request_line}")
+                        pass
                 except Exception: pass
         except Exception: pass
 
