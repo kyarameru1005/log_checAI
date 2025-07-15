@@ -46,10 +46,10 @@ def predict_log_anomaly(log_text):
     prediction = model.predict(vectorized_text)[0]
     return bool(prediction)
 
-# --- ★★★ 分析シーケンス（分析深化版） ★★★ ---
+# --- 分析シーケンス（サンドボックス起動〜記録）---
 def trigger_analysis_sequence(log_data, detection_method):
     print(f"--- 🚀 分析シーケンス開始 (検知方法: {detection_method}) ---")
-    
+    # (この関数の中身は変更なし)
     container_id = None
     try:
         print("1. Apacheサンドボックス環境を起動中...")
@@ -61,40 +61,33 @@ def trigger_analysis_sequence(log_data, detection_method):
         print(f"[エラー] サンドボックスの起動に失敗: {e}")
         return
 
-    # ステップ2: 攻撃を再現
-    reproduce_output = ""
+    reproduce_output, filesystem_changes = "", ""
     try:
         print(f"\n2. コンテナに対して攻撃を再現中...")
         request_path = log_data.get('request_first_line', '').split()[1]
         reproduce_command = ["docker", "exec", container_id, "curl", f"http://localhost:80{request_path}"]
         reproduce_result = subprocess.run(reproduce_command, capture_output=True, text=True, check=False)
-        reproduce_output = reproduce_result.stdout if reproduce_result.stdout else reproduce_result.stderr
+        reproduce_output = reproduce_result.stdout.strip() if reproduce_result.stdout else reproduce_result.stderr.strip()
         print("   ✅ 再現完了。")
     except Exception as e:
         reproduce_output = f"再現エラー: {e}"
 
-    # ★★★ ステップ3: ファイルシステムの変化を観察 ★★★
-    filesystem_changes = ""
     try:
         print("\n3. サンドボックス内のファイルシステムの変化を観察中...")
         diff_command = ["docker", "diff", container_id]
         diff_result = subprocess.run(diff_command, capture_output=True, text=True, check=True)
         filesystem_changes = diff_result.stdout.strip()
-        if filesystem_changes:
-            print("   ❗ ファイルシステムに変更を検知！")
-        else:
-            print("   ✅ ファイルシステムに変更はありませんでした。")
+        print("   ✅ 観察完了。")
     except Exception as e:
         filesystem_changes = f"差分検知エラー: {e}"
 
-    # ステップ4: 全ての分析結果を記録
     try:
         print(f"\n4. 分析結果を {ANALYSIS_FILE} に記録中...")
         analysis_record = {
             "analysis_timestamp": datetime.now().isoformat(),
             "detection_method": detection_method,
             "original_log": log_data,
-            "reproduction_result": reproduce_output.strip(),
+            "reproduction_result": reproduce_output,
             "filesystem_changes": filesystem_changes.split('\n') if filesystem_changes else []
         }
         with open(ANALYSIS_FILE, "a") as f:
@@ -103,44 +96,70 @@ def trigger_analysis_sequence(log_data, detection_method):
     except Exception as e:
         print(f"[エラー] 結果の記録に失敗: {e}")
 
-    # ステップ5: サンドボックス環境を破棄
     finally:
         if container_id:
             print("\n5. サンドボックス環境を破棄します。")
             subprocess.run(["docker", "stop", container_id], capture_output=True, text=True)
 
+# --- ★★★ 無限ループを修正したファイル監視ハンドラ ★★★ ---
 class ChangeHandler(FileSystemEventHandler):
-    def __init__(self): self.last_positions = {}
+    def __init__(self):
+        self.last_positions = {}
+
     def on_modified(self, event):
-        if event.is_directory or 'access.log' not in event.src_path: return
+        # ディレクトリの変更や、access.log以外のファイルは無視
+        if event.is_directory or 'access.log' not in event.src_path:
+            return
+
+        # ステップ1: 新しい行を確実に読み込み、読み終わった場所を記憶する
+        new_lines = []
         try:
             with open(event.src_path, 'r', encoding='utf-8') as f:
+                # 前回読み終わった場所から開始
                 f.seek(self.last_positions.get(event.src_path, 0))
                 new_lines = f.readlines()
+                # 読み終わった位置をすぐに更新する（これが重要！）
                 self.last_positions[event.src_path] = f.tell()
-            for line in new_lines:
-                if not line.strip(): continue
-                try:
-                    log_data = parser(line)
-                    request_line = log_data.get('request_first_line', '')
-                    
-                    if is_anomaly_by_rule(request_line):
-                        print("\n🚨🚨🚨【ルールで異常を検知】🚨🚨🚨")
-                        pprint(log_data)
-                        trigger_analysis_sequence(log_data, "Rule-based")
-                    elif predict_log_anomaly(request_line):
-                        print("\n🚨🚨🚨【AIが異常を検知】🚨🚨🚨")
-                        pprint(log_data)
-                        trigger_analysis_sequence(log_data, "AI-based")
-                except Exception: pass
-        except Exception: pass
+        except Exception as e:
+            print(f"[エラー] ログファイルの読み込みに失敗しました: {e}")
+            return # 読み込めない場合は、今回は何もしない
+
+        if not new_lines:
+            return # 新しい行がなければ終了
+
+        # ステップ2: 読み込んだ新しい行だけを処理する
+        for line in new_lines:
+            if not line.strip():
+                continue
+            
+            try:
+                log_data = parser(line)
+                request_line = log_data.get('request_first_line', '')
+                
+                # ルールまたはAIで異常を検知
+                if is_anomaly_by_rule(request_line):
+                    print("\n🚨🚨🚨【ルールで異常を検知】🚨🚨🚨")
+                    pprint(log_data)
+                    trigger_analysis_sequence(log_data, "Rule-based")
+                elif predict_log_anomaly(request_line):
+                    print("\n🚨🚨🚨【AIが異常を検知】🚨🚨🚨")
+                    pprint(log_data)
+                    trigger_analysis_sequence(log_data, "AI-based")
+
+            except Exception as e:
+                # 特定の行の処理でエラーが起きても、他の行の処理は続ける
+                print(f"[警告] ログ1行の処理に失敗しました。スキップします。エラー: {e}")
 
 if __name__ == "__main__":
-    print("\n--- TwinAI - Log Sentinel (分析深化モード) 起動 ---")
-    event_handler = ChangeHandler(); observer = Observer()
-    observer.schedule(event_handler, WATCH_DIR, recursive=True); observer.start()
+    print("\n--- TwinAI - Log Sentinel (v1.1 安定版) 起動 ---")
+    event_handler = ChangeHandler()
+    observer = Observer()
+    observer.schedule(event_handler, WATCH_DIR, recursive=True)
+    observer.start()
     try:
-        while True: time.sleep(1)
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
-        observer.stop(); print("\n--- 監視を終了します ---")
+        observer.stop()
+        print("\n--- 監視を終了します ---")
     observer.join()
