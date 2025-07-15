@@ -13,6 +13,14 @@ LOG_FORMAT = "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""
 parser = apache_log_parser.make_parser(LOG_FORMAT)
 ANALYSIS_FILE = "analysis_results.jsonl"
 
+# --- ★★★★★ 根本原因を解決する特別クラス ★★★★★ ---
+class DateTimeEncoder(json.JSONEncoder):
+    """ datetimeオブジェクトをJSONが扱える文字列に変換するクラス """
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
+
 # --- Anomaly Detection Rule ---
 def is_anomaly(log_data):
     try:
@@ -53,12 +61,13 @@ def trigger_analysis_sequence(log_data):
     try:
         print(f"\n3. 分析結果を {ANALYSIS_FILE} に記録中...")
         analysis_record = {
-            "timestamp": datetime.now().isoformat(),
+            "analysis_timestamp": datetime.now().isoformat(),
             "original_log": log_data,
             "reproduction_result": reproduce_output.strip()
         }
         with open(ANALYSIS_FILE, "a") as f:
-            f.write(json.dumps(analysis_record) + "\n")
+            # ↓↓↓ ここで特別クラスを指定！ ↓↓↓
+            f.write(json.dumps(analysis_record, cls=DateTimeEncoder) + "\n")
         print("   ✅ 記録完了。")
     except Exception as e:
         print(f"[エラー] 結果の記録に失敗しました: {e}")
