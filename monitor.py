@@ -31,7 +31,7 @@ def trigger_reproduce_sequence(log_data):
     container_id = None
     try:
         print("1. Apacheサンドボックス環境を起動中...")
-        command = ["docker", "run", "-d", "--rm", "httpd:latest"]
+        command = ["docker", "run", "-d", "--rm", "twinai-apache-sandbox"]
         result = subprocess.run(command, capture_output=True, text=True, check=True)
         container_id = result.stdout.strip()
         print(f"   ✅ 起動成功 (コンテナID: {container_id[:12]})")
