@@ -130,4 +130,53 @@ class ChangeHandler(FileSystemEventHandler):
                     log_time_str = utc_time.replace(tzinfo=timezone.utc).astimezone(ZoneInfo("Asia/Tokyo")).strftime('%Y-%m-%d %H:%M:%S') if utc_time else "時刻不明"
                     
                     print(f"\n🚨🚨🚨【{detection_method_for_header}で異常を検知】🚨🚨🚨")
-                    print(
+                    print(f"発生時刻 (JST): {log_time_str}")
+                    pprint(log_data)
+                    
+                    # 異常を検知したので、メインループに時刻を通知
+                    self.state['last_anomaly_time'] = datetime.now()
+                    self.state['quiet_period_notified'] = False # 通知フラグをリセット
+
+                    trigger_analysis_sequence(log_data, detection_method_for_sequence)
+
+            except Exception as e:
+                print(f"[警告] ログ1行の処理に失敗: {e}")
+
+if __name__ == "__main__":
+    print("\n--- TwinAI - Log Sentinel (v1.4 正常通知版) 起動 ---")
+    
+    # 異常検知の最終時刻と、通知済みかを管理する共有オブジェクト
+    shared_state = {
+        "last_anomaly_time": None,
+        "quiet_period_notified": True, # 最初は通知済みとして扱う
+    }
+    
+    event_handler = ChangeHandler(shared_state)
+    observer = Observer()
+    observer.schedule(event_handler, WATCH_DIR, recursive=True)
+    observer.start()
+    
+    print("--- 訓練済みAIモデルを読み込みました。---")
+    print("--- リアルタイムログ監視を開始します (Ctrl+Cで終了) ---")
+
+    try:
+        while True:
+            # 1秒ごとにチェック
+            time.sleep(1)
+            
+            # --- ここからが正常通知のロジック ---
+            # 一度でも異常が検知されたことがあるか？
+            if shared_state["last_anomaly_time"] is not None:
+                # 最後の異常検知から60秒以上経過したか？
+                elapsed = (datetime.now() - shared_state["last_anomaly_time"]).total_seconds()
+                # 60秒以上経過し、かつまだ「正常です」と通知していない場合
+                if elapsed > 60 and not shared_state["quiet_period_notified"]:
+                    jst_now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%H:%M:%S')
+                    print(f"\n✅ [システム正常] {jst_now}現在、1分間新たな異常は検知されていません。")
+                    # 一度通知したら、次の異常が起きるまで通知しないようにフラグを立てる
+                    shared_state["quiet_period_notified"] = True
+
+    except KeyboardInterrupt:
+        observer.stop()
+        print("\n--- 監視を終了します ---")
+    observer.join()
