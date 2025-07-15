@@ -113,7 +113,7 @@ if __name__ == "__main__":
             # 最後にメッセージを出力してから60秒以上経過したか？
             elapsed = (datetime.now() - shared_state["last_message_time"]).total_seconds()
             
-            if elapsed > 60:
+            if elapsed > 300:
                 jst_now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%H:%M:%S')
                 print(f"✅ [システム正常] {jst_now}現在、新たな異常は検知されていません。")
                 # メッセージを出力したので、タイマーを現在時刻にリセット
