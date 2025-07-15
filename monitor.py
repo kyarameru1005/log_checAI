@@ -1,7 +1,7 @@
 import time
 import subprocess
 import json
-from datetime import datetime # 日時を扱うためにインポート
+from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import apache_log_parser
@@ -53,16 +53,14 @@ def trigger_analysis_sequence(log_data):
     try:
         print(f"\n3. 分析結果を {ANALYSIS_FILE} に記録中...")
         analysis_record = {
-            # ↓↓↓ この行が修正されています！ ↓↓↓
-            "timestamp": datetime.now().isoformat(), # .isoformat() を付けて文字列に変換
+            "timestamp": datetime.now().isoformat(),
             "original_log": log_data,
             "reproduction_result": reproduce_output.strip()
         }
         with open(ANALYSIS_FILE, "a") as f:
             f.write(json.dumps(analysis_record) + "\n")
-        print("   ✅ 記録完了。") # ← ここに到達すれば成功
+        print("   ✅ 記録完了。")
     except Exception as e:
-        # エラーが発生する場合は、ここが実行される
         print(f"[エラー] 結果の記録に失敗しました: {e}")
 
     finally:
