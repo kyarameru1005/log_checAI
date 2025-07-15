@@ -1,83 +1,87 @@
 import time
-import logging
+import subprocess
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import apache_log_parser
 from pprint import pprint
 
-# 監視するディレクトリを指定
+# --- Configuration ---
 WATCH_DIR = "/var/log/apache2"
-
-# Apacheの一般的なCombined Log Format
 LOG_FORMAT = "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""
 parser = apache_log_parser.make_parser(LOG_FORMAT)
 
-# --- 異常検知のルールを定義 ---
+# --- Anomaly Detection Rule ---
 def is_anomaly(log_data):
-    """
-    ログデータを受け取り、異常かどうかを判定する関数。
-    今回はステータスコードが400以上の場合を「異常」とする。
-    """
     try:
         status = int(log_data['status'])
         if status >= 400:
-            return True # 異常
+            return True
     except (ValueError, KeyError):
-        # statusが数字でない、またはキーが存在しない場合
         return False
-    return False # 正常
+    return False
 
+# --- Isolation Action ---
+def trigger_isolation(log_data):
+    """
+    異常検知をトリガーに、Apacheコンテナを起動する。
+    """
+    print("\n--- 🚀 隔離シーケンス開始 ---")
+    print("異常なリクエストを検知。Apacheサンドボックス環境を起動します。")
+    
+    try:
+        # 'httpd'コンテナをバックグラウンドで起動し、停止時に自動で削除する
+        # コマンド: docker run -d --rm httpd:latest
+        # -d: デタッチモード（バックグラウンド実行）
+        # --rm: コンテナ停止時に自動で削除
+        command = ["docker", "run", "-d", "--rm", "httpd:latest"]
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        
+        container_id = result.stdout.strip()
+        print(f"\n✅ サンドボックス起動成功！")
+        print(f"   コンテナID: {container_id[:12]}") # IDを短縮して表示
+        print("   (確認コマンド: 'docker ps')")
+        
+    except FileNotFoundError:
+        print("\n[エラー] 'docker' コマンドが見つかりません。")
+    except subprocess.CalledProcessError as e:
+        print("\n[エラー] Dockerコンテナの起動に失敗しました。")
+        print(f"詳細: {e.stderr}")
+
+# --- Change Handler Class (変更なし) ---
 class ChangeHandler(FileSystemEventHandler):
     def __init__(self):
         self.last_positions = {}
-
     def on_modified(self, event):
-        if event.is_directory:
+        if event.is_directory or 'access.log' not in event.src_path:
             return
-
         filepath = event.src_path
-        # access.log以外のファイルは無視する（error.logなど）
-        if 'access.log' not in filepath:
-            return
-
         last_pos = self.last_positions.get(filepath, 0)
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 f.seek(last_pos)
                 new_lines = f.readlines()
                 self.last_positions[filepath] = f.tell()
-
             for line in new_lines:
-                if not line.strip():
-                    continue
+                if not line.strip(): continue
                 try:
                     log_data = parser(line)
-                    # 異常検知関数を呼び出す
                     if is_anomaly(log_data):
                         print("\n🚨🚨🚨 異常検知 🚨🚨🚨")
                         pprint(log_data)
-                    else:
-                        # 正常なログは必要に応じて表示（コメントアウトしてもOK）
-                        # print("\n--- [正常] ---")
-                        # pprint(log_data)
-                        pass
+                        trigger_isolation(log_data)
                 except ValueError:
                     pass
-        except Exception as e:
-            # Permission deniedを避けるため、エラー内容は簡潔に
-            # print(f"エラー: {e}")
+        except Exception:
             pass
 
-
+# --- Main Execution (変更なし) ---
 if __name__ == "__main__":
     print(f"--- ログ監視を開始します (Ctrl+Cで終了) ---")
     print(f"監視対象ディレクトリ: {WATCH_DIR}")
-
     event_handler = ChangeHandler()
     observer = Observer()
     observer.schedule(event_handler, WATCH_DIR, recursive=True)
     observer.start()
-
     try:
         while True:
             time.sleep(1)
