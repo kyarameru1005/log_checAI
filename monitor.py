@@ -4,7 +4,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # 監視するディレクトリを指定
-WATCH_DIR = "/ver/log/apache2/access.log"
+WATCH_DIR = "/ver/log/apache2"
 
 class ChangeHandler(FileSystemEventHandler):
     """ファイル変更を検知し、追記された行を読み取るハンドラ"""
