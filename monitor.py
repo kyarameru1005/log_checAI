@@ -26,12 +26,14 @@ def is_anomaly_by_rule(request_line):
     for pattern in BLACKLISTED_PATTERNS:
         if pattern.lower() in request_line.lower(): return True
     return False
+
 try:
     model = joblib.load('log_anomaly_model.joblib')
     vectorizer = joblib.load('tfidf_vectorizer.joblib')
 except FileNotFoundError:
-    print("[エラー] AIモデルファイルが見つかりません。")
+    print("[エラー] AIモデルファイルが見つかりません。train_model.pyを実行してください。")
     exit()
+
 def predict_log_anomaly(log_text):
     vectorized_text = vectorizer.transform([log_text])
     prediction = model.predict(vectorized_text)[0]
@@ -40,8 +42,53 @@ def predict_log_anomaly(log_text):
 # --- 分析シーケンス ---
 def trigger_analysis_sequence(log_data, detection_method):
     print(f"--- 🚀 分析シーケンス開始 (検知方法: {detection_method}) ---")
-    # (この関数の中身は変更ありません)
-    # ...
+    container_id = None
+    try:
+        print("1. Apacheサンドボックス環境を起動中...")
+        command = ["docker", "run", "-d", "--rm", "twinai-apache-sandbox"]
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        container_id = result.stdout.strip()
+        print(f"   ✅ 起動成功 (コンテナID: {container_id[:12]})")
+    except Exception as e:
+        print(f"[エラー] サンドボックスの起動に失敗: {e}")
+        return
+
+    reproduce_output, filesystem_changes = "", ""
+    try:
+        print(f"\n2. コンテナに対して攻撃を再現中...")
+        request_path = log_data.get('request_first_line', '').split()[1]
+        reproduce_command = ["docker", "exec", container_id, "curl", f"http://localhost:80{request_path}"]
+        reproduce_result = subprocess.run(reproduce_command, capture_output=True, text=True, check=False)
+        reproduce_output = reproduce_result.stdout.strip() if reproduce_result.stdout else reproduce_result.stderr.strip()
+        print("   ✅ 再現完了。")
+    except Exception as e:
+        reproduce_output = f"再現エラー: {e}"
+    try:
+        print("\n3. サンドボックス内のファイルシステムの変化を観察中...")
+        diff_command = ["docker", "diff", container_id]
+        diff_result = subprocess.run(diff_command, capture_output=True, text=True, check=True)
+        filesystem_changes = diff_result.stdout.strip()
+        print("   ✅ 観察完了。")
+    except Exception as e:
+        filesystem_changes = f"差分検知エラー: {e}"
+    try:
+        print(f"\n4. 分析結果を {ANALYSIS_FILE} に記録中...")
+        analysis_record = {
+            "analysis_timestamp": datetime.now(ZoneInfo("Asia/Tokyo")).isoformat(),
+            "detection_method": detection_method,
+            "original_log": log_data,
+            "reproduction_result": reproduce_output,
+            "filesystem_changes": filesystem_changes.split('\n') if filesystem_changes else []
+        }
+        with open(ANALYSIS_FILE, "a") as f:
+            f.write(json.dumps(analysis_record, cls=DateTimeEncoder) + "\n")
+        print("   ✅ 記録完了。")
+    except Exception as e:
+        print(f"[エラー] 結果の記録に失敗: {e}")
+    finally:
+        if container_id:
+            print("\n5. サンドボックス環境を破棄します。")
+            subprocess.run(["docker", "stop", container_id], capture_output=True, text=True)
 
 # --- 状態共有機能を追加したハンドラ ---
 class ChangeHandler(FileSystemEventHandler):
@@ -81,21 +128,16 @@ class ChangeHandler(FileSystemEventHandler):
                     print(f"発生時刻 (JST): {log_time_str}")
                     pprint(log_data)
                     
-                    # 異常を検知したので、正常通知のタイマーをリセット
                     self.state['last_message_time'] = datetime.now()
 
                     trigger_analysis_sequence(log_data, detection_method_for_sequence)
             except Exception as e:
                 print(f"[警告] ログ1行の処理に失敗: {e}")
 
-
 if __name__ == "__main__":
     print("\n--- TwinAI - Log Sentinel (v1.5 定期通知版) 起動 ---")
     
-    # 最後にメッセージを出力した時刻を管理する共有オブジェクト
-    shared_state = {
-        "last_message_time": datetime.now(),
-    }
+    shared_state = { "last_message_time": datetime.now() }
     
     event_handler = ChangeHandler(shared_state)
     observer = Observer()
@@ -108,15 +150,10 @@ if __name__ == "__main__":
     try:
         while True:
             time.sleep(1)
-            
-            # --- ★★★ ここからが定期正常通知のロジック ★★★ ---
-            # 最後にメッセージを出力してから60秒以上経過したか？
             elapsed = (datetime.now() - shared_state["last_message_time"]).total_seconds()
-            
-            if elapsed > 300:
+            if elapsed > 60:
                 jst_now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%H:%M:%S')
                 print(f"✅ [システム正常] {jst_now}現在、新たな異常は検知されていません。")
-                # メッセージを出力したので、タイマーを現在時刻にリセット
                 shared_state["last_message_time"] = datetime.now()
 
     except KeyboardInterrupt:
