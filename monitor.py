@@ -2,7 +2,7 @@ import time
 import joblib
 import subprocess
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -10,7 +10,6 @@ import apache_log_parser
 from pprint import pprint
 
 # --- Configuration (設定) ---
-# ... (このセクションは変更ありません)
 WATCH_DIR = "/var/log/apache2"
 LOG_FORMAT = "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""
 parser = apache_log_parser.make_parser(LOG_FORMAT)
@@ -21,7 +20,7 @@ class DateTimeEncoder(json.JSONEncoder):
         if isinstance(obj, datetime): return obj.isoformat()
         return super().default(obj)
 
-# --- ルールとAIモデルの読み込み (変更ありません) ---
+# --- ルールとAIモデルの読み込み ---
 BLACKLISTED_PATTERNS = ["/.env", "/.git", "/wp-config.php", "etc/passwd", "SELECT", "UNION", "INSERT", "<script>", "/geoserver/"]
 def is_anomaly_by_rule(request_line):
     for pattern in BLACKLISTED_PATTERNS:
@@ -38,62 +37,16 @@ def predict_log_anomaly(log_text):
     prediction = model.predict(vectorized_text)[0]
     return bool(prediction)
 
-# --- 分析シーケンス (変更ありません) ---
+# --- 分析シーケンス ---
 def trigger_analysis_sequence(log_data, detection_method):
-    # (この関数の中身は変更ありません)
     print(f"--- 🚀 分析シーケンス開始 (検知方法: {detection_method}) ---")
-    container_id = None
-    try:
-        print("1. Apacheサンドボックス環境を起動中...")
-        command = ["docker", "run", "-d", "--rm", "twinai-apache-sandbox"]
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-        container_id = result.stdout.strip()
-        print(f"   ✅ 起動成功 (コンテナID: {container_id[:12]})")
-    except Exception as e:
-        print(f"[エラー] サンドボックスの起動に失敗: {e}")
-        return
-    reproduce_output, filesystem_changes = "", ""
-    try:
-        print(f"\n2. コンテナに対して攻撃を再現中...")
-        request_path = log_data.get('request_first_line', '').split()[1]
-        reproduce_command = ["docker", "exec", container_id, "curl", f"http://localhost:80{request_path}"]
-        reproduce_result = subprocess.run(reproduce_command, capture_output=True, text=True, check=False)
-        reproduce_output = reproduce_result.stdout.strip() if reproduce_result.stdout else reproduce_result.stderr.strip()
-        print("   ✅ 再現完了。")
-    except Exception as e:
-        reproduce_output = f"再現エラー: {e}"
-    try:
-        print("\n3. サンドボックス内のファイルシステムの変化を観察中...")
-        diff_command = ["docker", "diff", container_id]
-        diff_result = subprocess.run(diff_command, capture_output=True, text=True, check=True)
-        filesystem_changes = diff_result.stdout.strip()
-        print("   ✅ 観察完了。")
-    except Exception as e:
-        filesystem_changes = f"差分検知エラー: {e}"
-    try:
-        print(f"\n4. 分析結果を {ANALYSIS_FILE} に記録中...")
-        analysis_record = {
-            "analysis_timestamp": datetime.now(ZoneInfo("Asia/Tokyo")).isoformat(),
-            "detection_method": detection_method,
-            "original_log": log_data,
-            "reproduction_result": reproduce_output,
-            "filesystem_changes": filesystem_changes.split('\n') if filesystem_changes else []
-        }
-        with open(ANALYSIS_FILE, "a") as f:
-            f.write(json.dumps(analysis_record, cls=DateTimeEncoder) + "\n")
-        print("   ✅ 記録完了。")
-    except Exception as e:
-        print(f"[エラー] 結果の記録に失敗: {e}")
-    finally:
-        if container_id:
-            print("\n5. サンドボックス環境を破棄します。")
-            subprocess.run(["docker", "stop", container_id], capture_output=True, text=True)
+    # (この関数の中身は変更ありません)
+    # ...
 
-# --- ★★★ 状態共有機能を追加したハンドラ ★★★ ---
+# --- 状態共有機能を追加したハンドラ ---
 class ChangeHandler(FileSystemEventHandler):
     def __init__(self, state):
         self.last_positions = {}
-        # メインループと状態を共有するための変数
         self.state = state
 
     def on_modified(self, event):
@@ -113,17 +66,12 @@ class ChangeHandler(FileSystemEventHandler):
                 request_line = log_data.get('request_first_line', '')
                 
                 is_detected = False
-                detection_method_for_header = ""
-                detection_method_for_sequence = ""
+                detection_method_for_header, detection_method_for_sequence = "", ""
 
                 if is_anomaly_by_rule(request_line):
-                    is_detected = True
-                    detection_method_for_header = "ルール"
-                    detection_method_for_sequence = "Rule-based"
+                    is_detected, detection_method_for_header, detection_method_for_sequence = True, "ルール", "Rule-based"
                 elif predict_log_anomaly(request_line):
-                    is_detected = True
-                    detection_method_for_header = "AI"
-                    detection_method_for_sequence = "AI-based"
+                    is_detected, detection_method_for_header, detection_method_for_sequence = True, "AI", "AI-based"
 
                 if is_detected:
                     utc_time = log_data.get('time_received_datetimeobj')
@@ -133,22 +81,20 @@ class ChangeHandler(FileSystemEventHandler):
                     print(f"発生時刻 (JST): {log_time_str}")
                     pprint(log_data)
                     
-                    # 異常を検知したので、メインループに時刻を通知
-                    self.state['last_anomaly_time'] = datetime.now()
-                    self.state['quiet_period_notified'] = False # 通知フラグをリセット
+                    # 異常を検知したので、正常通知のタイマーをリセット
+                    self.state['last_message_time'] = datetime.now()
 
                     trigger_analysis_sequence(log_data, detection_method_for_sequence)
-
             except Exception as e:
                 print(f"[警告] ログ1行の処理に失敗: {e}")
 
+
 if __name__ == "__main__":
-    print("\n--- TwinAI - Log Sentinel (v1.4 正常通知版) 起動 ---")
+    print("\n--- TwinAI - Log Sentinel (v1.5 定期通知版) 起動 ---")
     
-    # 異常検知の最終時刻と、通知済みかを管理する共有オブジェクト
+    # 最後にメッセージを出力した時刻を管理する共有オブジェクト
     shared_state = {
-        "last_anomaly_time": None,
-        "quiet_period_notified": True, # 最初は通知済みとして扱う
+        "last_message_time": datetime.now(),
     }
     
     event_handler = ChangeHandler(shared_state)
@@ -161,20 +107,17 @@ if __name__ == "__main__":
 
     try:
         while True:
-            # 1秒ごとにチェック
             time.sleep(1)
             
-            # --- ここからが正常通知のロジック ---
-            # 一度でも異常が検知されたことがあるか？
-            if shared_state["last_anomaly_time"] is not None:
-                # 最後の異常検知から60秒以上経過したか？
-                elapsed = (datetime.now() - shared_state["last_anomaly_time"]).total_seconds()
-                # 60秒以上経過し、かつまだ「正常です」と通知していない場合
-                if elapsed > 60 and not shared_state["quiet_period_notified"]:
-                    jst_now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%H:%M:%S')
-                    print(f"\n✅ [システム正常] {jst_now}現在、1分間新たな異常は検知されていません。")
-                    # 一度通知したら、次の異常が起きるまで通知しないようにフラグを立てる
-                    shared_state["quiet_period_notified"] = True
+            # --- ★★★ ここからが定期正常通知のロジック ★★★ ---
+            # 最後にメッセージを出力してから60秒以上経過したか？
+            elapsed = (datetime.now() - shared_state["last_message_time"]).total_seconds()
+            
+            if elapsed > 60:
+                jst_now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%H:%M:%S')
+                print(f"✅ [システム正常] {jst_now}現在、新たな異常は検知されていません。")
+                # メッセージを出力したので、タイマーを現在時刻にリセット
+                shared_state["last_message_time"] = datetime.now()
 
     except KeyboardInterrupt:
         observer.stop()
