@@ -49,7 +49,7 @@ def predict_log_anomaly(log_text):
 # --- 分析シーケンス（サンドボックス起動〜記録）---
 def trigger_analysis_sequence(log_data, detection_method):
     print(f"--- 🚀 分析シーケンス開始 (検知方法: {detection_method}) ---")
-    # (この関数の中身は変更なし)
+    # ... (この関数の中身は変更ありません)
     container_id = None
     try:
         print("1. Apacheサンドボックス環境を起動中...")
@@ -101,33 +101,24 @@ def trigger_analysis_sequence(log_data, detection_method):
             print("\n5. サンドボックス環境を破棄します。")
             subprocess.run(["docker", "stop", container_id], capture_output=True, text=True)
 
-# --- ★★★ 無限ループを修正したファイル監視ハンドラ ★★★ ---
 class ChangeHandler(FileSystemEventHandler):
     def __init__(self):
         self.last_positions = {}
 
     def on_modified(self, event):
-        # ディレクトリの変更や、access.log以外のファイルは無視
         if event.is_directory or 'access.log' not in event.src_path:
             return
 
-        # ステップ1: 新しい行を確実に読み込み、読み終わった場所を記憶する
         new_lines = []
         try:
             with open(event.src_path, 'r', encoding='utf-8') as f:
-                # 前回読み終わった場所から開始
                 f.seek(self.last_positions.get(event.src_path, 0))
                 new_lines = f.readlines()
-                # 読み終わった位置をすぐに更新する（これが重要！）
                 self.last_positions[event.src_path] = f.tell()
         except Exception as e:
             print(f"[エラー] ログファイルの読み込みに失敗しました: {e}")
-            return # 読み込めない場合は、今回は何もしない
+            return
 
-        if not new_lines:
-            return # 新しい行がなければ終了
-
-        # ステップ2: 読み込んだ新しい行だけを処理する
         for line in new_lines:
             if not line.strip():
                 continue
@@ -136,22 +127,26 @@ class ChangeHandler(FileSystemEventHandler):
                 log_data = parser(line)
                 request_line = log_data.get('request_first_line', '')
                 
-                # ルールまたはAIで異常を検知
-                if is_anomaly_by_rule(request_line):
-                    print("\n🚨🚨🚨【ルールで異常を検知】🚨🚨🚨")
+                # --- ★★★★★ ここからが修正箇所 ★★★★★ ---
+                def print_anomaly_header(detection_method):
+                    """異常検知時のヘッダー（時刻情報を含む）を表示する"""
+                    log_time_str = log_data.get('time_received_isoformat', '時刻不明').replace('T', ' ')
+                    print(f"\n🚨🚨🚨【{detection_method}で異常を検知】🚨🚨🚨")
+                    print(f"発生時刻: {log_time_str}")
                     pprint(log_data)
+
+                if is_anomaly_by_rule(request_line):
+                    print_anomaly_header("ルール")
                     trigger_analysis_sequence(log_data, "Rule-based")
                 elif predict_log_anomaly(request_line):
-                    print("\n🚨🚨🚨【AIが異常を検知】🚨🚨🚨")
-                    pprint(log_data)
+                    print_anomaly_header("AI")
                     trigger_analysis_sequence(log_data, "AI-based")
-
+                
             except Exception as e:
-                # 特定の行の処理でエラーが起きても、他の行の処理は続ける
                 print(f"[警告] ログ1行の処理に失敗しました。スキップします。エラー: {e}")
 
 if __name__ == "__main__":
-    print("\n--- TwinAI - Log Sentinel (v1.1 安定版) 起動 ---")
+    print("\n--- TwinAI - Log Sentinel (v1.2 時刻表示版) 起動 ---")
     event_handler = ChangeHandler()
     observer = Observer()
     observer.schedule(event_handler, WATCH_DIR, recursive=True)
