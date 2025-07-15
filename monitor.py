@@ -8,18 +8,15 @@ from watchdog.events import FileSystemEventHandler
 import apache_log_parser
 from pprint import pprint
 
-# --- Configuration ---
+# --- Configuration (設定) ---
 WATCH_DIR = "/var/log/apache2"
 LOG_FORMAT = "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""
 parser = apache_log_parser.make_parser(LOG_FORMAT)
 ANALYSIS_FILE = "analysis_results.jsonl"
 
-# --- ★★★★★ 日付データを自動で文字列に変換する特別クラス ★★★★★ ---
 class DateTimeEncoder(json.JSONEncoder):
-    """ datetimeオブジェクトをJSONが扱える文字列に変換する """
     def default(self, obj):
-        if isinstance(obj, datetime):
-            return obj.isoformat()
+        if isinstance(obj, datetime): return obj.isoformat()
         return super().default(obj)
 
 # --- 1. ルールベースのブラックリスト ---
@@ -30,18 +27,17 @@ BLACKLISTED_PATTERNS = [
 
 def is_anomaly_by_rule(request_line):
     for pattern in BLACKLISTED_PATTERNS:
-        if pattern.lower() in request_line.lower():
-            return True
+        if pattern.lower() in request_line.lower(): return True
     return False
 
-# --- 2. 訓練済みAIモデルと変換器の読み込み ---
+# --- 2. 訓練済みAIモデルの読み込み ---
 try:
     print("--- 訓練済みAIモデルを読み込んでいます... ---")
     model = joblib.load('log_anomaly_model.joblib')
     vectorizer = joblib.load('tfidf_vectorizer.joblib')
     print("   ✅ AIモデルの準備完了。")
 except FileNotFoundError:
-    print("[エラー] AIモデルファイルが見つかりません。train_model.py を実行してください。")
+    print("[エラー] AIモデルファイルが見つかりません。")
     exit()
 
 # --- 3. AIによる予測関数 ---
@@ -50,7 +46,7 @@ def predict_log_anomaly(log_text):
     prediction = model.predict(vectorized_text)[0]
     return bool(prediction)
 
-# --- 分析シーケンス（サンドボックス起動〜記録）---
+# --- ★★★ 分析シーケンス（分析深化版） ★★★ ---
 def trigger_analysis_sequence(log_data, detection_method):
     print(f"--- 🚀 分析シーケンス開始 (検知方法: {detection_method}) ---")
     
@@ -65,9 +61,10 @@ def trigger_analysis_sequence(log_data, detection_method):
         print(f"[エラー] サンドボックスの起動に失敗: {e}")
         return
 
+    # ステップ2: 攻撃を再現
     reproduce_output = ""
     try:
-        print(f"\n2. コンテナ {container_id[:12]} に対して攻撃を再現中...")
+        print(f"\n2. コンテナに対して攻撃を再現中...")
         request_path = log_data.get('request_first_line', '').split()[1]
         reproduce_command = ["docker", "exec", container_id, "curl", f"http://localhost:80{request_path}"]
         reproduce_result = subprocess.run(reproduce_command, capture_output=True, text=True, check=False)
@@ -75,26 +72,41 @@ def trigger_analysis_sequence(log_data, detection_method):
         print("   ✅ 再現完了。")
     except Exception as e:
         reproduce_output = f"再現エラー: {e}"
-        print(f"[エラー] 攻撃の再現に失敗: {e}")
 
+    # ★★★ ステップ3: ファイルシステムの変化を観察 ★★★
+    filesystem_changes = ""
     try:
-        print(f"\n3. 分析結果を {ANALYSIS_FILE} に記録中...")
+        print("\n3. サンドボックス内のファイルシステムの変化を観察中...")
+        diff_command = ["docker", "diff", container_id]
+        diff_result = subprocess.run(diff_command, capture_output=True, text=True, check=True)
+        filesystem_changes = diff_result.stdout.strip()
+        if filesystem_changes:
+            print("   ❗ ファイルシステムに変更を検知！")
+        else:
+            print("   ✅ ファイルシステムに変更はありませんでした。")
+    except Exception as e:
+        filesystem_changes = f"差分検知エラー: {e}"
+
+    # ステップ4: 全ての分析結果を記録
+    try:
+        print(f"\n4. 分析結果を {ANALYSIS_FILE} に記録中...")
         analysis_record = {
             "analysis_timestamp": datetime.now().isoformat(),
             "detection_method": detection_method,
             "original_log": log_data,
-            "reproduction_result": reproduce_output.strip()
+            "reproduction_result": reproduce_output.strip(),
+            "filesystem_changes": filesystem_changes.split('\n') if filesystem_changes else []
         }
         with open(ANALYSIS_FILE, "a") as f:
-            # ↓↓↓ ここをDateTimeEncoderクラスを使うように修正しました！ ↓↓↓
             f.write(json.dumps(analysis_record, cls=DateTimeEncoder) + "\n")
         print("   ✅ 記録完了。")
     except Exception as e:
         print(f"[エラー] 結果の記録に失敗: {e}")
 
+    # ステップ5: サンドボックス環境を破棄
     finally:
         if container_id:
-            print("\n4. サンドボックス環境を破棄します。")
+            print("\n5. サンドボックス環境を破棄します。")
             subprocess.run(["docker", "stop", container_id], capture_output=True, text=True)
 
 class ChangeHandler(FileSystemEventHandler):
@@ -120,15 +132,11 @@ class ChangeHandler(FileSystemEventHandler):
                         print("\n🚨🚨🚨【AIが異常を検知】🚨🚨🚨")
                         pprint(log_data)
                         trigger_analysis_sequence(log_data, "AI-based")
-                    else:
-                        # 正常なログは大量に出力されるため、簡潔に表示
-                        # print(f"✅ [正常] {request_line}")
-                        pass
                 except Exception: pass
         except Exception: pass
 
 if __name__ == "__main__":
-    print("\n--- TwinAI - Log Sentinel (完全自動モード) 起動 ---")
+    print("\n--- TwinAI - Log Sentinel (分析深化モード) 起動 ---")
     event_handler = ChangeHandler(); observer = Observer()
     observer.schedule(event_handler, WATCH_DIR, recursive=True); observer.start()
     try:
