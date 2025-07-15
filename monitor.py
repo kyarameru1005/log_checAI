@@ -20,35 +20,54 @@ def is_anomaly(log_data):
         return False
     return False
 
-# --- Isolation Action ---
-def trigger_isolation(log_data):
+# --- Isolation & Reproduction Action ---
+def trigger_reproduce_sequence(log_data):
     """
-    異常検知をトリガーに、Apacheコンテナを起動する。
+    異常検知をトリガーに、コンテナを起動し、攻撃を再現する。
     """
-    print("\n--- 🚀 隔離シーケンス開始 ---")
-    print("異常なリクエストを検知。Apacheサンドボックス環境を起動します。")
+    print("\n--- 🚀 再現シーケンス開始 ---")
     
+    # 1. サンドボックス環境（Apacheコンテナ）を起動
+    container_id = None
     try:
-        # 'httpd'コンテナをバックグラウンドで起動し、停止時に自動で削除する
-        # コマンド: docker run -d --rm httpd:latest
-        # -d: デタッチモード（バックグラウンド実行）
-        # --rm: コンテナ停止時に自動で削除
+        print("1. Apacheサンドボックス環境を起動中...")
         command = ["docker", "run", "-d", "--rm", "httpd:latest"]
         result = subprocess.run(command, capture_output=True, text=True, check=True)
-        
         container_id = result.stdout.strip()
-        print(f"\n✅ サンドボックス起動成功！")
-        print(f"   コンテナID: {container_id[:12]}") # IDを短縮して表示
-        print("   (確認コマンド: 'docker ps')")
-        
-    except FileNotFoundError:
-        print("\n[エラー] 'docker' コマンドが見つかりません。")
-    except subprocess.CalledProcessError as e:
-        print("\n[エラー] Dockerコンテナの起動に失敗しました。")
-        print(f"詳細: {e.stderr}")
+        print(f"   ✅ 起動成功 (コンテナID: {container_id[:12]})")
+    except Exception as e:
+        print(f"[エラー] サンドボックスの起動に失敗しました: {e}")
+        return # 起動に失敗したら処理を中断
 
-# --- Change Handler Class (変更なし) ---
+    # 2. 攻撃リクエストをコンテナ内で再現
+    try:
+        print(f"\n2. コンテナ {container_id[:12]} に対して攻撃を再現中...")
+        # "GET /path/to/resource HTTP/1.1" から "/path/to/resource" を抽出
+        request_path = log_data.get('request_first_line', '').split()[1]
+        
+        # docker exec [container_id] curl http://localhost:80[path]
+        reproduce_command = [
+            "docker", "exec", container_id,
+            "curl", f"http://localhost:80{request_path}"
+        ]
+        
+        reproduce_result = subprocess.run(reproduce_command, capture_output=True, text=True, check=True)
+        print("   ✅ 再現完了。コンテナからの応答:")
+        print("------------------------------------------")
+        print(reproduce_result.stdout)
+        print("------------------------------------------")
+
+    except Exception as e:
+        print(f"[エラー] 攻撃の再現に失敗しました: {e}")
+
+    # 3. 分析のためにコンテナを一定時間残し、その後停止（ここでは即時停止）
+    finally:
+        print("\n3. 分析完了。サンドボックス環境を破棄します。")
+        subprocess.run(["docker", "stop", container_id], capture_output=True)
+
+
 class ChangeHandler(FileSystemEventHandler):
+    # (このクラスの中身は変更ありません)
     def __init__(self):
         self.last_positions = {}
     def on_modified(self, event):
@@ -68,16 +87,13 @@ class ChangeHandler(FileSystemEventHandler):
                     if is_anomaly(log_data):
                         print("\n🚨🚨🚨 異常検知 🚨🚨🚨")
                         pprint(log_data)
-                        trigger_isolation(log_data)
-                except ValueError:
-                    pass
-        except Exception:
-            pass
+                        trigger_reproduce_sequence(log_data)
+                except ValueError: pass
+        except Exception: pass
 
-# --- Main Execution (変更なし) ---
 if __name__ == "__main__":
+    # (main処理は変更ありません)
     print(f"--- ログ監視を開始します (Ctrl+Cで終了) ---")
-    print(f"監視対象ディレクトリ: {WATCH_DIR}")
     event_handler = ChangeHandler()
     observer = Observer()
     observer.schedule(event_handler, WATCH_DIR, recursive=True)
