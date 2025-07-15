@@ -2,8 +2,8 @@ import time
 import joblib
 import subprocess
 import json
-from datetime import datetime, timezone # timezoneを追加
-from zoneinfo import ZoneInfo # タイムゾーン変換のために追加
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import apache_log_parser
@@ -27,14 +27,12 @@ def is_anomaly_by_rule(request_line):
     for pattern in BLACKLISTED_PATTERNS:
         if pattern.lower() in request_line.lower(): return True
     return False
-
 try:
     model = joblib.load('log_anomaly_model.joblib')
     vectorizer = joblib.load('tfidf_vectorizer.joblib')
 except FileNotFoundError:
     print("[エラー] AIモデルファイルが見つかりません。")
     exit()
-
 def predict_log_anomaly(log_text):
     vectorized_text = vectorizer.transform([log_text])
     prediction = model.predict(vectorized_text)[0]
@@ -91,12 +89,12 @@ def trigger_analysis_sequence(log_data, detection_method):
             print("\n5. サンドボックス環境を破棄します。")
             subprocess.run(["docker", "stop", container_id], capture_output=True, text=True)
 
-# --- ★★★ JST変換機能を追加したハンドラ ★★★ ---
+# --- ★★★ 状態共有機能を追加したハンドラ ★★★ ---
 class ChangeHandler(FileSystemEventHandler):
-    def __init__(self):
+    def __init__(self, state):
         self.last_positions = {}
-        print("--- 訓練済みAIモデルを読み込みました。---")
-        print("--- リアルタイムログ監視を開始します (Ctrl+Cで終了) ---")
+        # メインループと状態を共有するための変数
+        self.state = state
 
     def on_modified(self, event):
         if event.is_directory or 'access.log' not in event.src_path: return
@@ -106,9 +104,7 @@ class ChangeHandler(FileSystemEventHandler):
                 f.seek(self.last_positions.get(event.src_path, 0))
                 new_lines = f.readlines()
                 self.last_positions[event.src_path] = f.tell()
-        except Exception as e:
-            print(f"[エラー] ログファイルの読み込みに失敗: {e}")
-            return
+        except Exception: return
 
         for line in new_lines:
             if not line.strip(): continue
@@ -116,39 +112,22 @@ class ChangeHandler(FileSystemEventHandler):
                 log_data = parser(line)
                 request_line = log_data.get('request_first_line', '')
                 
-                def print_anomaly_header(detection_method):
-                    # --- ここからがJST変換処理 ---
-                    utc_time = log_data.get('time_received_datetimeobj')
-                    if utc_time:
-                        # UTC時刻を日本時間に変換
-                        jst_time = utc_time.replace(tzinfo=timezone.utc).astimezone(ZoneInfo("Asia/Tokyo"))
-                        log_time_str = jst_time.strftime('%Y-%m-%d %H:%M:%S')
-                    else:
-                        log_time_str = "時刻不明"
-                    
-                    print(f"\n🚨🚨🚨【{detection_method}で異常を検知】🚨🚨🚨")
-                    print(f"発生時刻 (JST): {log_time_str}")
-                    pprint(log_data)
+                is_detected = False
+                detection_method_for_header = ""
+                detection_method_for_sequence = ""
 
                 if is_anomaly_by_rule(request_line):
-                    print_anomaly_header("ルール")
-                    trigger_analysis_sequence(log_data, "Rule-based")
+                    is_detected = True
+                    detection_method_for_header = "ルール"
+                    detection_method_for_sequence = "Rule-based"
                 elif predict_log_anomaly(request_line):
-                    print_anomaly_header("AI")
-                    trigger_analysis_sequence(log_data, "AI-based")
-            except Exception as e:
-                print(f"[警告] ログ1行の処理に失敗: {e}")
+                    is_detected = True
+                    detection_method_for_header = "AI"
+                    detection_method_for_sequence = "AI-based"
 
-if __name__ == "__main__":
-    print("\n--- TwinAI - Log Sentinel (v1.3 JST表示版) 起動 ---")
-    event_handler = ChangeHandler()
-    observer = Observer()
-    observer.schedule(event_handler, WATCH_DIR, recursive=True)
-    observer.start()
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        observer.stop()
-        print("\n--- 監視を終了します ---")
-    observer.join()
+                if is_detected:
+                    utc_time = log_data.get('time_received_datetimeobj')
+                    log_time_str = utc_time.replace(tzinfo=timezone.utc).astimezone(ZoneInfo("Asia/Tokyo")).strftime('%Y-%m-%d %H:%M:%S') if utc_time else "時刻不明"
+                    
+                    print(f"\n🚨🚨🚨【{detection_method_for_header}で異常を検知】🚨🚨🚨")
+                    print(
