@@ -1,14 +1,34 @@
-# 不審なファイルやディレクトリ
+# --- Dangerous Files & Dirs ---
 /.env
 /.git
+/.htaccess
 /wp-config.php
 etc/passwd
 /geoserver/
+docker-compose.yml
+web.config
+~/.bash_history
 
-# SQLインジェクション関連
+# --- SQL Injection ---
 SELECT
 UNION
 INSERT
 
-# クロスサイトスクリプティング(XSS)関連
+# --- Cross-Site Scripting (XSS) ---
 <script>
+
+# --- Command Injection ---
+wget 
+curl 
+;
+|sh
+system(
+
+# --- Directory Traversal ---
+../
+..%2f
+
+# --- Known Vulnerability Scans ---
+/phpmyadmin/
+jndi:ldap
+/actuator/
