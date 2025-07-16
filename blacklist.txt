@@ -1,0 +1,14 @@
+# 不審なファイルやディレクトリ
+/.env
+/.git
+/wp-config.php
+etc/passwd
+/geoserver/
+
+# SQLインジェクション関連
+SELECT
+UNION
+INSERT
+
+# クロスサイトスクリプティング(XSS)関連
+<script>
