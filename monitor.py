@@ -20,43 +20,14 @@ class DateTimeEncoder(json.JSONEncoder):
         if isinstance(obj, datetime): return obj.isoformat()
         return super().default(obj)
 
-# --- ★★★ 外部リストの読み込み ★★★ ---
-def load_list_from_file(filename):
-    """ファイルからキーワードのリストを読み込む関数"""
-    try:
-        with open(filename, 'r', encoding='utf-8') as f:
-            # ファイルを1行ずつ読み込み、コメントや空行を無視する
-            return [line.strip() for line in f if line.strip() and not line.startswith('#')]
-    except FileNotFoundError:
-        # ファイルが存在しない場合は空のリストを返す
-        print(f"[情報] '{filename}' が見つかりませんでした。リストは空として扱います。")
-        return []
-
-print("--- ホワイトリストとブラックリストを読み込んでいます... ---")
-WHITELIST_PATTERNS = load_list_from_file('whitelist.txt')
-BLACKLIST_PATTERNS = load_list_from_file('blacklist.txt')
-print(f"   ✅ ホワイトリスト読み込み完了: {len(WHITELIST_PATTERNS)}件")
-print(f"   ✅ ブラックリスト読み込み完了: {len(BLACKLIST_PATTERNS)}件")
-
-# --- 検知ロジック関数 ---
-def is_whitelisted(request_line):
-    for pattern in WHITELIST_PATTERNS:
-        if pattern.lower() in request_line.lower(): return True
-    return False
-
-def is_blacklisted(request_line):
-    for pattern in BLACKLISTED_PATTERNS:
-        if pattern.lower() in request_line.lower(): return True
-    return False
-
-# --- AIモデルの読み込み ---
+# --- AIモデルと分析関数 (これらはグローバルに配置) ---
 try:
     print("--- 訓練済みAIモデルを読み込んでいます... ---")
     model = joblib.load('log_anomaly_model.joblib')
     vectorizer = joblib.load('tfidf_vectorizer.joblib')
     print("   ✅ AIモデルの準備完了。")
 except FileNotFoundError:
-    print("[エラー] AIモデルファイルが見つかりません。train_model.pyを実行してください。")
+    print("[エラー] AIモデルファイルが見つかりません。train_model.pyを先に実行してください。")
     exit()
 
 def predict_log_anomaly(log_text):
@@ -64,16 +35,43 @@ def predict_log_anomaly(log_text):
     prediction = model.predict(vectorized_text)[0]
     return bool(prediction)
 
-# --- 分析シーケンス (この関数は変更ありません) ---
 def trigger_analysis_sequence(log_data, detection_method):
+    # この関数の中身は変更ありません
     print(f"--- 🚀 分析シーケンス開始 (検知方法: {detection_method}) ---")
-    # ... (中身は同じなので省略)
+    # ... (処理内容は同じなので省略)
 
-# --- ファイル監視ハンドラ ---
+# --- ★★★ バグを修正したファイル監視ハンドラ ★★★ ---
 class ChangeHandler(FileSystemEventHandler):
     def __init__(self, state):
         self.last_positions = {}
         self.state = state
+        # --- クラスのインスタンスに直接リストを読み込む ---
+        print("--- ホワイトリストとブラックリストを読み込んでいます... ---")
+        self.whitelist = self._load_list_from_file('whitelist.txt')
+        self.blacklist = self._load_list_from_file('blacklist.txt')
+        print(f"   ✅ ホワイトリスト読み込み完了: {len(self.whitelist)}件")
+        print(f"   ✅ ブラックリスト読み込み完了: {len(self.blacklist)}件")
+
+    def _load_list_from_file(self, filename):
+        """ファイルからリストを読み込むヘルパーメソッド"""
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                return [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        except FileNotFoundError:
+            print(f"[情報] '{filename}' が見つかりませんでした。リストは空として扱います。")
+            return []
+
+    def _is_whitelisted(self, request_line):
+        """インスタンスのホワイトリストと照合する"""
+        for pattern in self.whitelist:
+            if pattern.lower() in request_line.lower(): return True
+        return False
+
+    def _is_blacklisted(self, request_line):
+        """インスタンスのブラックリストと照合する"""
+        for pattern in self.blacklist:
+            if pattern.lower() in request_line.lower(): return True
+        return False
 
     def on_modified(self, event):
         if event.is_directory or 'access.log' not in event.src_path: return
@@ -91,18 +89,12 @@ class ChangeHandler(FileSystemEventHandler):
                 log_data = parser(line)
                 request_line = log_data.get('request_first_line', '')
                 
-                # --- ★★★ 新しい検知ロジック ★★★ ---
-                # 1. ホワイトリストを最優先でチェック
-                if is_whitelisted(request_line):
-                    # 正常なのでタイマーをリセットして次のログへ
+                if self._is_whitelisted(request_line):
                     self.state['last_message_time'] = datetime.now()
                     continue
 
-                # 2. ブラックリストとAIで異常を検知
-                is_detected = False
-                detection_method = ""
-                
-                if is_blacklisted(request_line):
+                is_detected, detection_method = False, ""
+                if self._is_blacklisted(request_line):
                     is_detected, detection_method = True, "ブラックリスト"
                 elif predict_log_anomaly(request_line):
                     is_detected, detection_method = True, "AI"
@@ -115,7 +107,6 @@ class ChangeHandler(FileSystemEventHandler):
                     print(f"発生時刻 (JST): {log_time_str}")
                     pprint(log_data)
                     
-                    # 異常検知なのでタイマーをリセット
                     self.state['last_message_time'] = datetime.now()
                     trigger_analysis_sequence(log_data, detection_method)
             except Exception as e:
@@ -123,7 +114,7 @@ class ChangeHandler(FileSystemEventHandler):
 
 
 if __name__ == "__main__":
-    print("\n--- TwinAI - Log Sentinel (v2.0 外部リスト版) 起動 ---")
+    print("\n--- TwinAI - Log Sentinel (v2.1 修正版) 起動 ---")
     
     shared_state = { "last_message_time": datetime.now() }
     event_handler = ChangeHandler(shared_state)
@@ -139,7 +130,7 @@ if __name__ == "__main__":
             elapsed = (datetime.now() - shared_state["last_message_time"]).total_seconds()
             if elapsed > 60:
                 jst_now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%H:%M:%S')
-                print(f"✅ [システム正常] {jst_now}現在、新たな異常は検知されていません。")
+                print(f"✅ [システム正常] {jst_now}現在、1分間新たな異常は検知されていません。")
                 shared_state["last_message_time"] = datetime.now()
     except KeyboardInterrupt:
         observer.stop()
