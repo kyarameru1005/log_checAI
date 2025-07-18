@@ -15,8 +15,8 @@ LOG_FORMAT = "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""
 parser = apache_log_parser.make_parser(LOG_FORMAT)
 ANALYSIS_FILE = "analysis_results.jsonl"
 IP_COUNTS_FILE = "ip_access_counts.json"
-# ★★★ 攻撃パスを記録するファイル ★★★
-ANOMALOUS_PATHS_FILE = "anomalous_paths.txt"
+# ★★★ 攻撃パスの回数を記録するファイル ★★★
+ANOMALOUS_PATH_COUNTS_FILE = "anomalous_path_counts.json"
 
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -71,6 +71,7 @@ def trigger_analysis_sequence(log_data, detection_method):
     except Exception as e:
         print(f"[エラー] サンドボックスの起動に失敗: {e}")
         return
+
     reproduce_output, filesystem_changes = "", ""
     try:
         print(f"\n2. コンテナに対して攻撃を再現中...")
@@ -110,10 +111,11 @@ def trigger_analysis_sequence(log_data, detection_method):
 
 # --- ファイル監視ハンドラ ---
 class ChangeHandler(FileSystemEventHandler):
-    def __init__(self, state, ip_counts):
+    def __init__(self, state, ip_counts, path_counts):
         self.last_positions = {}
         self.state = state
         self.ip_counts = ip_counts
+        self.path_counts = path_counts # 攻撃パスカウント用の辞書
 
     def on_modified(self, event):
         if event.is_directory or 'access.log' not in event.src_path: return
@@ -153,33 +155,34 @@ class ChangeHandler(FileSystemEventHandler):
                     
                     self.state['last_message_time'] = datetime.now()
 
-                    # ★★★★★ ここからが追記部分 ★★★★★
+                    # --- ★★★ 攻撃されたパスをカウントアップ ★★★ ---
                     request_path = log_data.get('request_url_path')
                     if request_path:
-                        try:
-                            with open(ANOMALOUS_PATHS_FILE, "a", encoding='utf-8') as f:
-                                f.write(request_path + "\n")
-                        except Exception as e:
-                            print(f"[警告] 攻撃パスの記録に失敗しました: {e}")
-                    # ★★★★★★★★★★★★★★★★★★★★★★
+                        self.path_counts[request_path] = self.path_counts.get(request_path, 0) + 1
 
                     trigger_analysis_sequence(log_data, detection_method)
             except Exception as e:
                 print(f"[警告] ログ1行の処理に失敗: {e}")
 
 if __name__ == "__main__":
-    print("\n--- TwinAI - Log Sentinel (v2.4 攻撃パス記録版) 起動 ---")
+    print("\n--- TwinAI - Log Sentinel (v2.5 攻撃パス集計版) 起動 ---")
 
+    # --- 起動時にIPとパスのカウントファイルを読み込む ---
     ip_counts_data = {}
+    path_counts_data = {}
     try:
-        with open(IP_COUNTS_FILE, 'r', encoding='utf-8') as f:
-            ip_counts_data = json.load(f)
-        print(f"--- 過去のIPアクセス履歴を読み込みました ---")
+        with open(IP_COUNTS_FILE, 'r', encoding='utf-8') as f: ip_counts_data = json.load(f)
+        print("--- 過去のIPアクセス履歴を読み込みました ---")
     except (FileNotFoundError, json.JSONDecodeError):
-        print(f"--- IPアクセス履歴ファイルが見つからないため、新規に作成します ---")
+        print("--- IPアクセス履歴ファイルが見つからないため、新規に作成します ---")
+    try:
+        with open(ANOMALOUS_PATH_COUNTS_FILE, 'r', encoding='utf-8') as f: path_counts_data = json.load(f)
+        print("--- 過去の攻撃パス履歴を読み込みました ---")
+    except (FileNotFoundError, json.JSONDecodeError):
+        print("--- 攻撃パス履歴ファイルが見つからないため、新規に作成します ---")
 
     shared_state = {"last_message_time": datetime.now()}
-    event_handler = ChangeHandler(shared_state, ip_counts_data)
+    event_handler = ChangeHandler(shared_state, ip_counts_data, path_counts_data)
     observer = Observer()
     observer.schedule(event_handler, WATCH_DIR, recursive=True)
     observer.start()
@@ -192,18 +195,22 @@ if __name__ == "__main__":
             elapsed = (datetime.now() - shared_state["last_message_time"]).total_seconds()
             if elapsed > 60:
                 jst_now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%H:%M:%S')
-                print(f"✅ [システム正常] {jst_now}現在、1分間新たな異常は検知されていません。")
+                print(f"✅ [システム正常] {jst_now}現在、新たな異常は検知されていません。")
                 shared_state["last_message_time"] = datetime.now()
-                with open(IP_COUNTS_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(ip_counts_data, f, indent=4)
+                with open(IP_COUNTS_FILE, 'w', encoding='utf-8') as f: json.dump(ip_counts_data, f, indent=4)
+                with open(ANOMALOUS_PATH_COUNTS_FILE, 'w', encoding='utf-8') as f: json.dump(path_counts_data, f, indent=4)
 
     except KeyboardInterrupt:
         print("\n--- 監視を終了します。最終結果を保存中... ---")
     finally:
+        # --- 終了時に最終的なIPとパスのカウントを保存 ---
         with open(IP_COUNTS_FILE, 'w', encoding='utf-8') as f:
-            sorted_counts = dict(sorted(ip_counts_data.items(), key=lambda item: item[1], reverse=True))
-            json.dump(sorted_counts, f, indent=4)
-        print("--- IPアクセス回数の保存が完了しました。 ---")
+            sorted_ips = dict(sorted(ip_counts_data.items(), key=lambda item: item[1], reverse=True))
+            json.dump(sorted_ips, f, indent=4)
+        with open(ANOMALOUS_PATH_COUNTS_FILE, 'w', encoding='utf-8') as f:
+            sorted_paths = dict(sorted(path_counts_data.items(), key=lambda item: item[1], reverse=True))
+            json.dump(sorted_paths, f, indent=4)
+        print("--- IPアクセス回数と攻撃パス回数の保存が完了しました。 ---")
         observer.stop()
         
     observer.join()
