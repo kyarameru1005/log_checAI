@@ -15,6 +15,8 @@ LOG_FORMAT = "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""
 parser = apache_log_parser.make_parser(LOG_FORMAT)
 ANALYSIS_FILE = "analysis_results.jsonl"
 IP_COUNTS_FILE = "ip_access_counts.json"
+# ★★★ 攻撃パスを記録するファイル ★★★
+ANOMALOUS_PATHS_FILE = "anomalous_paths.txt"
 
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -40,7 +42,7 @@ except FileNotFoundError:
     print("[エラー] AIモデルファイルが見つかりません。train_model.pyを先に実行してください。")
     exit()
 
-# --- ★★★ 修正済みの関数定義 ★★★ ---
+# --- 検知関数 ---
 def is_whitelisted(request_line):
     for pattern in WHITELIST_PATTERNS:
         if pattern.lower() in request_line.lower(): return True
@@ -56,6 +58,7 @@ def predict_log_anomaly(log_text):
     prediction = model.predict(vectorized_text)[0]
     return bool(prediction)
 
+# --- 分析シーケンス ---
 def trigger_analysis_sequence(log_data, detection_method):
     print(f"--- 🚀 分析シーケンス開始 (検知方法: {detection_method}) ---")
     container_id = None
@@ -68,7 +71,6 @@ def trigger_analysis_sequence(log_data, detection_method):
     except Exception as e:
         print(f"[エラー] サンドボックスの起動に失敗: {e}")
         return
-
     reproduce_output, filesystem_changes = "", ""
     try:
         print(f"\n2. コンテナに対して攻撃を再現中...")
@@ -106,7 +108,7 @@ def trigger_analysis_sequence(log_data, detection_method):
             print("\n5. サンドボックス環境を破棄します。")
             subprocess.run(["docker", "stop", container_id], capture_output=True, text=True)
 
-# --- IPカウント機能を追加したハンドラ ---
+# --- ファイル監視ハンドラ ---
 class ChangeHandler(FileSystemEventHandler):
     def __init__(self, state, ip_counts):
         self.last_positions = {}
@@ -150,12 +152,23 @@ class ChangeHandler(FileSystemEventHandler):
                     pprint(log_data)
                     
                     self.state['last_message_time'] = datetime.now()
+
+                    # ★★★★★ ここからが追記部分 ★★★★★
+                    request_path = log_data.get('request_url_path')
+                    if request_path:
+                        try:
+                            with open(ANOMALOUS_PATHS_FILE, "a", encoding='utf-8') as f:
+                                f.write(request_path + "\n")
+                        except Exception as e:
+                            print(f"[警告] 攻撃パスの記録に失敗しました: {e}")
+                    # ★★★★★★★★★★★★★★★★★★★★★★
+
                     trigger_analysis_sequence(log_data, detection_method)
             except Exception as e:
                 print(f"[警告] ログ1行の処理に失敗: {e}")
 
 if __name__ == "__main__":
-    print("\n--- TwinAI - Log Sentinel (v2.3 IPカウント版) 起動 ---")
+    print("\n--- TwinAI - Log Sentinel (v2.4 攻撃パス記録版) 起動 ---")
 
     ip_counts_data = {}
     try:
