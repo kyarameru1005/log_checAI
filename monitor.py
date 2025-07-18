@@ -1,3 +1,4 @@
+#!/home/kyarameru/log_checAI/.venv/bin/python
 import time
 import joblib
 import subprocess
