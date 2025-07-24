@@ -1,2 +1,13 @@
 # これは安全な自作の管理ツールなので、攻撃ではない
 /admin/run_backup.php
+# Judged by human on 2025-07-18 16:06
+/
+
+# Judged by human on 2025-07-18 16:09
+/
+
+# Judged by human on 2025-07-18 16:27
+/
+
+# Judged by human on 2025-07-18 16:28
+/icons/Icon-192.png

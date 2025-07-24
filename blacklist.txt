@@ -1,5 +1,4 @@
 # --- Dangerous Files & Dirs ---
-/.env
 /.git
 /.htaccess
 /wp-config.php
@@ -32,3 +31,11 @@ system(
 /phpmyadmin/
 jndi:ldap
 /actuator/
+# Judged by human on 2025-07-18 16:03
+/.env
+
+# Judged by human on 2025-07-18 16:09
+/.env
+
+# Judged by human on 2025-07-18 16:27
+/.env
