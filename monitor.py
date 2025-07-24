@@ -192,10 +192,8 @@ if __name__ == "__main__":
 
     try:
         while True:
-            print("[DEBUG] ループ継続中: ", datetime.now())
             time.sleep(1)
             elapsed = (datetime.now() - shared_state["last_message_time"]).total_seconds()
-            print(f"[DEBUG] 経過秒数: {elapsed}")
             if elapsed > 60:
                 try:
                     jst_now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%H:%M:%S')
