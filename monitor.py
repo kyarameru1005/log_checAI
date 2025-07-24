@@ -192,17 +192,24 @@ if __name__ == "__main__":
 
     try:
         while True:
+            print("[DEBUG] ループ継続中: ", datetime.now())
             time.sleep(1)
             elapsed = (datetime.now() - shared_state["last_message_time"]).total_seconds()
+            print(f"[DEBUG] 経過秒数: {elapsed}")
             if elapsed > 60:
-                jst_now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%H:%M:%S')
-                print(f"✅ [システム正常] {jst_now}現在、新たな異常は検知されていません。")
-                shared_state["last_message_time"] = datetime.now()
-                with open(IP_COUNTS_FILE, 'w', encoding='utf-8') as f: json.dump(ip_counts_data, f, indent=4)
-                with open(ANOMALOUS_PATH_COUNTS_FILE, 'w', encoding='utf-8') as f: json.dump(path_counts_data, f, indent=4)
+                try:
+                    jst_now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime('%H:%M:%S')
+                    print(f"✅ [システム正常] {jst_now}現在、新たな異常は検知されていません。")
+                    shared_state["last_message_time"] = datetime.now()
+                    with open(IP_COUNTS_FILE, 'w', encoding='utf-8') as f: json.dump(ip_counts_data, f, indent=4)
+                    with open(ANOMALOUS_PATH_COUNTS_FILE, 'w', encoding='utf-8') as f: json.dump(path_counts_data, f, indent=4)
+                except Exception as e:
+                    print(f"[DEBUG][例外] 1分ごと出力処理で例外: {e}")
 
     except KeyboardInterrupt:
         print("\n--- 監視を終了します。最終結果を保存中... ---")
+    except Exception as e:
+        print(f"[DEBUG][例外] メインループで例外: {e}")
     finally:
         # --- 終了時に最終的なIPとパスのカウントを保存 ---
         with open(IP_COUNTS_FILE, 'w', encoding='utf-8') as f:
