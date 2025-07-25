@@ -1,4 +1,5 @@
 #!/home/kyarameru/log_checAI/.venv/bin/python
+# --- 必要なライブラリのインポート ---
 import time
 import joblib
 import subprocess
@@ -11,20 +12,20 @@ import apache_log_parser
 from pprint import pprint
 
 # --- 設定 ---
-WATCH_DIR = "/var/log/apache2"
-LOG_FORMAT = "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""
-parser = apache_log_parser.make_parser(LOG_FORMAT)
-ANALYSIS_FILE = "analysis_results.jsonl"
-IP_COUNTS_FILE = "ip_access_counts.json"
-# ★★★ 攻撃パスの回数を記録するファイル ★★★
-ANOMALOUS_PATH_COUNTS_FILE = "anomalous_path_counts.json"
+WATCH_DIR = "/var/log/apache2"  # 監視対象のディレクトリ（Apacheログディレクトリ）
+LOG_FORMAT = "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""  # Apacheログの書式
+parser = apache_log_parser.make_parser(LOG_FORMAT)  # ログパーサの作成
+ANALYSIS_FILE = "analysis_results.jsonl"  # 分析結果の保存ファイル
+IP_COUNTS_FILE = "ip_access_counts.json"  # IPごとのアクセス回数保存ファイル
+ANOMALOUS_PATH_COUNTS_FILE = "anomalous_path_counts.json"  # 攻撃パスの回数を記録するファイル
 
+# --- 日時をJSONで扱うためのエンコーダ ---
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, datetime): return obj.isoformat()
         return super().default(obj)
 
-# --- 外部リストの読み込み ---
+# --- 外部リスト（ホワイトリスト・ブラックリスト）の読み込み関数 ---
 def load_list_from_file(filename):
     try:
         with open(filename, 'r', encoding='utf-8') as f:
@@ -32,35 +33,41 @@ def load_list_from_file(filename):
     except FileNotFoundError:
         return []
 
-WHITELIST_PATTERNS = load_list_from_file('whitelist.txt')
-BLACKLIST_PATTERNS = load_list_from_file('blacklist.txt')
+WHITELIST_PATTERNS = load_list_from_file('whitelist.txt')  # ホワイトリストパターンの読み込み
+BLACKLIST_PATTERNS = load_list_from_file('blacklist.txt')  # ブラックリストパターンの読み込み
 
-# --- AIモデルの読み込み ---
+# --- AIモデルとベクトライザの読み込み ---
 try:
-    model = joblib.load('log_anomaly_model.joblib')
-    vectorizer = joblib.load('tfidf_vectorizer.joblib')
+    model = joblib.load('log_anomaly_model.joblib')  # 異常検知モデル
+    vectorizer = joblib.load('tfidf_vectorizer.joblib')  # テキストベクトライザ
 except FileNotFoundError:
     print("[エラー] AIモデルファイルが見つかりません。train_model.pyを先に実行してください。")
     exit()
 
-# --- 検知関数 ---
+# --- ホワイトリスト判定関数 ---
 def is_whitelisted(request_line):
+    """リクエストがホワイトリストに該当するか判定"""
     for pattern in WHITELIST_PATTERNS:
         if pattern.lower() in request_line.lower(): return True
     return False
 
+# --- ブラックリスト判定関数 ---
 def is_blacklisted(request_line):
+    """リクエストがブラックリストに該当するか判定"""
     for pattern in BLACKLIST_PATTERNS:
         if pattern.lower() in request_line.lower(): return True
     return False
 
+# --- AIによる異常判定関数 ---
 def predict_log_anomaly(log_text):
+    """AIモデルでリクエストの異常判定を行う"""
     vectorized_text = vectorizer.transform([log_text])
     prediction = model.predict(vectorized_text)[0]
     return bool(prediction)
 
-# --- 分析シーケンス ---
+# --- 攻撃検知時の分析シーケンス ---
 def trigger_analysis_sequence(log_data, detection_method):
+    """攻撃検知時にサンドボックスで再現・分析し、結果を記録する"""
     print(f"--- 🚀 分析シーケンス開始 (検知方法: {detection_method}) ---")
     container_id = None
     try:
@@ -110,15 +117,16 @@ def trigger_analysis_sequence(log_data, detection_method):
             print("\n5. サンドボックス環境を破棄します。")
             subprocess.run(["docker", "stop", container_id], capture_output=True, text=True)
 
-# --- ファイル監視ハンドラ ---
+# --- ファイル監視イベントハンドラ ---
 class ChangeHandler(FileSystemEventHandler):
     def __init__(self, state, ip_counts, path_counts):
-        self.last_positions = {}
-        self.state = state
-        self.ip_counts = ip_counts
+        self.last_positions = {}  # 各ファイルの最終読み取り位置を記録
+        self.state = state  # 共有状態（最終メッセージ時刻など）
+        self.ip_counts = ip_counts  # IPごとのアクセス回数辞書
         self.path_counts = path_counts # 攻撃パスカウント用の辞書
 
     def on_modified(self, event):
+        # access.logファイルの変更のみ処理
         if event.is_directory or 'access.log' not in event.src_path: return
         try:
             with open(event.src_path, 'r', encoding='utf-8') as f:
@@ -130,10 +138,10 @@ class ChangeHandler(FileSystemEventHandler):
         for line in new_lines:
             if not line.strip(): continue
             try:
-                log_data = parser(line)
+                log_data = parser(line)  # ログ1行をパース
                 ip_address = log_data.get('remote_host')
                 if ip_address:
-                    self.ip_counts[ip_address] = self.ip_counts.get(ip_address, 0) + 1
+                    self.ip_counts[ip_address] = self.ip_counts.get(ip_address, 0) + 1  # IPごとにカウント
                 
                 request_line = log_data.get('request_first_line', '')
                 if is_whitelisted(request_line):
@@ -156,7 +164,7 @@ class ChangeHandler(FileSystemEventHandler):
                     
                     self.state['last_message_time'] = datetime.now()
 
-                    # --- ★★★ 攻撃されたパスをカウントアップ ★★★ ---
+                    # --- 攻撃されたパスをカウントアップ ---
                     request_path = log_data.get('request_url_path')
                     if request_path:
                         self.path_counts[request_path] = self.path_counts.get(request_path, 0) + 1

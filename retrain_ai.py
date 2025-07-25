@@ -1,3 +1,4 @@
+# --- 必要なライブラリのインポート ---
 import pandas as pd
 import joblib
 import json
@@ -39,6 +40,7 @@ try:
 except FileNotFoundError:
     print("[情報] 'analysis_results.jsonl' はまだありません。スキップします。")
 
+# --- データが1件もなければ終了 ---
 if not all_records:
     print("[エラー] 学習するためのデータが1件もありません。")
     exit()
@@ -48,6 +50,7 @@ data = pd.DataFrame(all_records)
 
 # --- 2. データの前処理と特徴量への変換 (train_model.pyと同じ) ---
 print("\n2. テキストデータをAIが理解できる数値に変換中...")
+# 各レコードのリクエスト1行目を抽出し、空欄は空文字列で埋める
 texts = data['log'].apply(lambda x: x.get('request_first_line', '') if isinstance(x, dict) else '').fillna("")
 vectorizer = TfidfVectorizer()
 X = vectorizer.fit_transform(texts)

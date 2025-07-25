@@ -1,15 +1,16 @@
+# --- 必要なライブラリのインポート ---
 import json
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 # --- 設定 ---
-PATH_COUNTS_FILE = "anomalous_path_counts.json"
-BLACKLIST_FILE = "blacklist.txt"
-WHITELIST_FILE = "whitelist.txt"
+PATH_COUNTS_FILE = "anomalous_path_counts.json"  # 攻撃パスのカウントファイル
+BLACKLIST_FILE = "blacklist.txt"  # ブラックリストファイル
+WHITELIST_FILE = "whitelist.txt"  # ホワイトリストファイル
 
 def clear_screen():
-    """ターミナル画面をクリアする"""
+    """ターミナル画面をクリアする（Windows/Linux対応）"""
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def load_path_counts():

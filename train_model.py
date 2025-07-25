@@ -1,3 +1,4 @@
+# --- 必要なライブラリのインポート ---
 import pandas as pd
 import joblib
 import json # jsonライブラリを直接使うためにインポート
@@ -34,6 +35,7 @@ except json.JSONDecodeError as e:
 
 # --- 2. データの前処理と特徴量への変換 ---
 print("\n2. テキストデータをAIが理解できる数値に変換中...")
+# 各レコードのリクエスト1行目を抽出し、空欄は空文字列で埋める
 texts = data['log'].apply(lambda x: x.get('request_first_line', '')).fillna("")
 vectorizer = TfidfVectorizer()
 X = vectorizer.fit_transform(texts)
@@ -48,6 +50,7 @@ print(f"\n3. データを訓練用({len(y_train)}件)とテスト用({len(y_test
 
 # --- 4. AIモデルの訓練 ---
 print("\n4. AIモデル（ロジスティック回帰）の訓練を開始...")
+# max_iterを増やして収束しやすくする
 model = LogisticRegression(max_iter=1000) # 収束しやすくするためにmax_iterを増やす
 model.fit(X_train, y_train)
 print("   ✅ 訓練完了！")
@@ -62,6 +65,7 @@ print("\n   詳細レポート:")
 print(classification_report(y_test, y_pred, zero_division=0))
 
 # --- 6. 完成したモデルと変換器の保存 ---
+# 訓練済みモデルとベクトライザをファイルに保存
 joblib.dump(model, 'log_anomaly_model.joblib')
 joblib.dump(vectorizer, 'tfidf_vectorizer.joblib')
 
