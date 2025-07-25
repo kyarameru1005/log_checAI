@@ -3,3 +3,6 @@
 
 # Judged by human on 2025-07-18 16:28
 /icons/Icon-192.png
+
+# Judged by human on 2025-07-25 10:12
+/robots.txt

@@ -39,3 +39,9 @@ jndi:ldap
 
 # Judged by human on 2025-07-18 16:27
 /.env
+
+# Judged by human on 2025-07-25 10:12
+/api/points/user
+
+# Judged by human on 2025-07-25 10:12
+/.env
